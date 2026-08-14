@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import calendar
+import openpyxl
 
 st.set_page_config(page_title="Генератор звітів", layout="wide")
 
@@ -9,10 +10,12 @@ st.title("Генератор звітів")
 
 # Configuration in sidebar
 st.sidebar.header("Налаштування планів")
+show_debug = st.sidebar.checkbox("Режим налагодження (Логи парсингу)", value=False)
 plan_instagram = st.sidebar.number_input("План Instagram", value=4500000, step=100000)
 plan_site = st.sidebar.number_input("План сайт", value=1500000, step=100000)
 zalyzhok = st.sidebar.number_input("Залишок за попередній тиждень", value=500000, step=10000)
 zakryto_tyzhden = st.sidebar.number_input("Закрито за тиждень", value=786300, step=10000)
+custom_day = st.sidebar.number_input("День місяця для розрахунку", value=0, min_value=0, max_value=31, step=1, help="Залиште 0 для використання поточного дня")
 
 uploaded_file = st.file_uploader("Завантажте Excel файл (.xlsx)", type=["xlsx"])
 
@@ -27,7 +30,20 @@ if uploaded_file is not None:
     sheet_name = xl.sheet_names[0] # taking the latest sheet (first one)
     df = xl.parse(sheet_name)
     
-    st.write(f"**Парситься сторінка:** {sheet_name}")
+    try:
+        uploaded_file.seek(0)
+        wb = openpyxl.load_workbook(uploaded_file, read_only=True)
+        last_modified = wb.properties.modified
+        date_str = last_modified.strftime("%d.%m.%Y %H:%M") if last_modified else "Невідомо"
+        if last_modified and last_modified.date() != datetime.datetime.now().date():
+            date_str = f":red[{date_str}]"
+    except Exception:
+        date_str = "Невідомо"
+        
+    st.write(f"**Парситься сторінка:** {sheet_name} | **Остання зміна файлу:** {date_str}")
+    
+    if 'last_modified' in locals() and last_modified and last_modified.date() != datetime.datetime.now().date():
+        st.warning("Увага: Дата останньої зміни цього файлу не сьогодні! Переконайтеся, що ви завантажили найсвіжішу версію таблиці.", icon="⚠️")
     
     # Identify manager blocks
     manager_blocks = []
@@ -45,10 +61,18 @@ if uploaded_file is not None:
                     "start_col": start_col
                 })
     
+    # Ensure "Стажери" is included
+    if not any(b["name"] == "Стажери" for b in manager_blocks):
+        manager_blocks.append({
+            "name": "Стажери",
+            "start_col": -1
+        })
+    
     managers_data = {}
     
     st.subheader("Плани менеджерів")
     manager_plans = {}
+    manager_includes = {}
     default_plans = {
         "Вікторія": 1200000,
         "Тетяна": 1000000,
@@ -64,13 +88,16 @@ if uploaded_file is not None:
         m_name = block["name"]
         def_plan = default_plans.get(m_name, 1000000)
         with cols[i % len(cols)]:
+            manager_includes[m_name] = st.checkbox(f"Включити: {m_name}", value=True)
             manager_plans[m_name] = st.number_input(f"План: {m_name}", value=def_plan, step=100000)
         
-    total_manager_plans = sum(manager_plans.values())
+    total_manager_plans = sum(plan for name, plan in manager_plans.items() if manager_includes.get(name, True))
     total_plan_month = plan_instagram + plan_site
     
     if total_manager_plans > total_plan_month:
         st.warning(f"Увага: Загальна сума планів менеджерів ({format_space(total_manager_plans)}) перевищує загальний план на місяць ({format_space(total_plan_month)})!")
+    elif total_manager_plans < total_plan_month:
+        st.info(f"До відома: Загальна сума планів менеджерів ({format_space(total_manager_plans)}) менша за загальний план на місяць ({format_space(total_plan_month)}).")
         
     if st.button("Згенерувати звіт", type="primary"):
         total_zakryto = 0
@@ -80,7 +107,15 @@ if uploaded_file is not None:
         # Process each block
         for block in manager_blocks:
             m_name = block["name"]
+            
+            if not manager_includes.get(m_name, True):
+                continue
+                
             start_col = block["start_col"]
+            
+            if start_col == -1:
+                managers_data[m_name] = {"zakryto": 0}
+                continue
             
             # The columns in block: 0: п/н, 1: № замовлення, 2: сума, 3: сайт/інстаграм (optional)
             suma_col = df.columns[start_col + 2]
@@ -89,6 +124,35 @@ if uploaded_file is not None:
             
             # Skip the header rows (index 0 and 1)
             df_manager = df.iloc[2:].copy()
+            
+            # Stop parsing at "Загальна"
+            col0 = df.columns[start_col]
+            col1 = df.columns[start_col + 1]
+            mask_zagalna = df_manager[col0].astype(str).str.lower().str.contains("загальна") | df_manager[col1].astype(str).str.lower().str.contains("загальна")
+            if mask_zagalna.any():
+                first_zagalna_idx = mask_zagalna.idxmax()
+                df_manager = df_manager.loc[:first_zagalna_idx - 1]
+            
+            if show_debug:
+                # Create debug dataframe
+                debug_cols = [df.columns[start_col], df.columns[start_col + 1], df.columns[start_col + 2]]
+                rename_dict = {
+                    df.columns[start_col]: "Нумерація",
+                    df.columns[start_col + 1]: "№ замовлення",
+                    df.columns[start_col + 2]: "Сума"
+                }
+                if has_source_col:
+                    debug_cols.append(df.columns[start_col + 3])
+                    rename_dict[df.columns[start_col + 3]] = "Коментар"
+                    
+                debug_df = df_manager[debug_cols].copy()
+                debug_df = debug_df.rename(columns=rename_dict)
+                debug_df["№ замовлення"] = debug_df["№ замовлення"].replace(r'^\s*$', pd.NA, regex=True)
+                debug_df["Сума"] = debug_df["Сума"].replace(r'^\s*$', pd.NA, regex=True)
+                debug_df = debug_df.dropna(subset=["№ замовлення", "Сума"], how='all')
+                
+                st.write(f"#### Логи парсингу: {m_name}")
+                st.dataframe(debug_df, use_container_width=True)
             
             df_manager[suma_col] = pd.to_numeric(df_manager[suma_col], errors='coerce')
             df_manager = df_manager.dropna(subset=[suma_col])
@@ -113,17 +177,21 @@ if uploaded_file is not None:
             }
             
         now = datetime.datetime.now()
-        current_date_str = now.strftime("%d.%m.%Y")
         days_in_month = calendar.monthrange(now.year, now.month)[1]
-        current_day = now.day
+        
+        if custom_day > 0:
+            current_day = custom_day
+            current_date_str = f"{custom_day:02d}.{now.month:02d}.{now.year}"
+        else:
+            current_day = now.day
+            current_date_str = now.strftime("%d.%m.%Y")
         
         plan_day = ((total_plan_month / 4) + zalyzhok) / 7
         
         month_progress = (total_plan_month / days_in_month) * current_day
         total_diff = total_zakryto - month_progress
         total_diff_sign = "+" if total_diff > 0 else ""
-        
-        plan_week = total_plan_month / 4
+        plan_week = (total_plan_month / 4) + zalyzhok
         zakryto_tyzhden_percent = (zakryto_tyzhden / plan_week) * 100 if plan_week > 0 else 0
         
         # Build text
