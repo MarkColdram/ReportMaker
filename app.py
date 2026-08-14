@@ -31,35 +31,7 @@ if uploaded_file is not None:
     sheet_name = xl.sheet_names[0] # taking the latest sheet (first one)
     df = xl.parse(sheet_name)
     
-    last_modified_kyiv = None
-    try:
-        uploaded_file.seek(0)
-        wb = openpyxl.load_workbook(uploaded_file, read_only=True)
-        last_modified = wb.properties.modified
-        
-        kyiv_tz = ZoneInfo("Europe/Kyiv")
-        now_kyiv = datetime.datetime.now(kyiv_tz)
-        
-        if last_modified:
-            # openpyxl returns naive datetime that is actually UTC
-            last_modified_kyiv = last_modified.replace(tzinfo=ZoneInfo("UTC")).astimezone(kyiv_tz)
-            date_str = last_modified_kyiv.strftime("%d.%m.%Y %H:%M")
-            if last_modified_kyiv.date() != now_kyiv.date():
-                date_str = f":red[{date_str}]"
-        else:
-            date_str = "Невідомо"
-            
-    except Exception:
-        date_str = "Невідомо"
-        
-    st.write(f"**Парситься сторінка:** {sheet_name} | **Остання зміна файлу:** {date_str}")
-    
-    try:
-        now_kyiv = datetime.datetime.now(ZoneInfo("Europe/Kyiv"))
-        if last_modified_kyiv and last_modified_kyiv.date() != now_kyiv.date():
-            st.error("🚨 **УВАГА!** Дата останньої зміни цього файлу не сьогодні! Можливо, ви завантажили стару таблицю. Будь ласка, перевірте дуже уважно!", icon="🚨")
-    except Exception:
-        pass
+    st.write(f"**Парситься сторінка:** {sheet_name}")
     
     # Identify manager blocks
     manager_blocks = []
