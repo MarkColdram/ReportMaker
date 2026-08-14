@@ -151,8 +151,11 @@ if uploaded_file is not None:
                 debug_df["Сума"] = debug_df["Сума"].replace(r'^\s*$', pd.NA, regex=True)
                 debug_df = debug_df.dropna(subset=["№ замовлення", "Сума"], how='all')
                 
+                # Convert all columns to string to avoid Arrow mixed-type serialization errors
+                debug_df = debug_df.astype(str)
+                
                 st.write(f"#### Логи парсингу: {m_name}")
-                st.dataframe(debug_df, use_container_width=True)
+                st.dataframe(debug_df)
             
             df_manager[suma_col] = pd.to_numeric(df_manager[suma_col], errors='coerce')
             df_manager = df_manager.dropna(subset=[suma_col])
